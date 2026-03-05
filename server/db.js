@@ -56,6 +56,8 @@ CREATE TABLE IF NOT EXISTS student_details (
   last_name TEXT,
   level TEXT,
   speciality TEXT,
+  advisor_name TEXT,
+  advisor_email TEXT,
   project_title TEXT,
   FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
 );
@@ -65,6 +67,7 @@ CREATE TABLE IF NOT EXISTS teacher_details (
   teacher_id TEXT,
   first_name TEXT,
   last_name TEXT,
+  grade TEXT,
   speciality TEXT,
   FOREIGN KEY (user_email) REFERENCES users(email) ON DELETE CASCADE
 );
@@ -120,11 +123,26 @@ CREATE TABLE IF NOT EXISTS evaluations (
   FOREIGN KEY (evaluator_email) REFERENCES users(email) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS grade_publications (
+  student_email TEXT PRIMARY KEY,
+  published_at INTEGER NOT NULL,
+  published_by TEXT,
+  FOREIGN KEY (student_email) REFERENCES users(email) ON DELETE CASCADE
+);
+
 CREATE TABLE IF NOT EXISTS planning_status (
   id INTEGER PRIMARY KEY CHECK (id = 1),
   validated INTEGER NOT NULL DEFAULT 0,
   validated_at INTEGER,
   validated_by TEXT
+);
+
+CREATE TABLE IF NOT EXISTS document_deadlines (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  report_deadline TEXT,
+  memoire_deadline TEXT,
+  updated_at INTEGER,
+  updated_by TEXT
 );
 
 CREATE TABLE IF NOT EXISTS notification_batches (
@@ -148,6 +166,41 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
 
 CREATE INDEX IF NOT EXISTS notification_deliveries_recipient_idx
   ON notification_deliveries(recipient_email, read_at, id);
+`);
+
+const studentDetailsColumns = db.prepare(`PRAGMA table_info(student_details)`).all().map((row) => String(row.name || ''));
+if (!studentDetailsColumns.includes('profile_completed')) {
+  db.exec(`ALTER TABLE student_details ADD COLUMN profile_completed INTEGER NOT NULL DEFAULT 0`);
+}
+if (!studentDetailsColumns.includes('advisor_name')) {
+  db.exec(`ALTER TABLE student_details ADD COLUMN advisor_name TEXT`);
+}
+if (!studentDetailsColumns.includes('advisor_email')) {
+  db.exec(`ALTER TABLE student_details ADD COLUMN advisor_email TEXT`);
+}
+if (!studentDetailsColumns.includes('profile_picture_url')) {
+  db.exec(`ALTER TABLE student_details ADD COLUMN profile_picture_url TEXT`);
+}
+const teacherDetailsColumns = db.prepare(`PRAGMA table_info(teacher_details)`).all().map((row) => String(row.name || ''));
+if (!teacherDetailsColumns.includes('grade')) {
+  db.exec(`ALTER TABLE teacher_details ADD COLUMN grade TEXT`);
+}
+if (!teacherDetailsColumns.includes('profile_completed')) {
+  db.exec(`ALTER TABLE teacher_details ADD COLUMN profile_completed INTEGER NOT NULL DEFAULT 0`);
+}
+
+// Backfill rooms table from existing data so the admin "Rooms" list is never empty when slots/defenses exist.
+db.exec(`
+INSERT OR IGNORE INTO rooms (name)
+SELECT DISTINCT TRIM(room_name)
+FROM room_slots
+WHERE TRIM(COALESCE(room_name, '')) <> '';
+`);
+db.exec(`
+INSERT OR IGNORE INTO rooms (name)
+SELECT DISTINCT TRIM(classroom)
+FROM defenses
+WHERE TRIM(COALESCE(classroom, '')) <> '';
 `);
 
 function splitCsv(v) {
@@ -227,7 +280,12 @@ export function upsertReport({ user_email, status, deadline, report_url, memoire
 }
 
 export function listMessages({ user, peer }) {
-  const stmt = db.prepare(`SELECT user, peer, content, created_at FROM messages WHERE (user=@user AND peer=@peer) OR (user=@peer AND peer=@user) ORDER BY created_at ASC`);
+  const stmt = db.prepare(`
+    SELECT id, user, peer, content, created_at
+    FROM messages
+    WHERE (user=@user AND peer=@peer) OR (user=@peer AND peer=@user)
+    ORDER BY created_at ASC, id ASC
+  `);
   return stmt.all({ user, peer });
 }
 export function addMessage({ user, peer, content, created_at }) {
@@ -247,22 +305,135 @@ export function listStudents() {
       sd.last_name,
       sd.level,
       sd.speciality,
-      sd.project_title
+      sd.advisor_name,
+      sd.advisor_email,
+      sd.project_title,
+      sd.profile_picture_url,
+      sd.profile_completed,
+      r.status AS report_status,
+      r.deadline AS report_deadline,
+      r.report_url,
+      r.memoire_url
     FROM users u
     LEFT JOIN student_details sd ON sd.user_email = u.email
+    LEFT JOIN reports r ON r.user_email = u.email
     WHERE u.role = 'student'
     ORDER BY COALESCE(sd.last_name, u.name), COALESCE(sd.first_name, '')
   `).all();
 }
+
+export function getStudentByEmail(email) {
+  return db.prepare(`
+    SELECT
+      u.email AS user_email,
+      u.name AS account_name,
+      sd.student_id,
+      sd.first_name,
+      sd.last_name,
+      sd.level,
+      sd.speciality,
+      sd.advisor_name,
+      sd.advisor_email,
+      sd.project_title,
+      sd.profile_picture_url,
+      sd.profile_completed
+    FROM users u
+    LEFT JOIN student_details sd ON sd.user_email = u.email
+    WHERE u.role = 'student' AND u.email = @email
+    LIMIT 1
+  `).get({ email });
+}
+
 export function upsertStudent(d) {
-  const exists = db.prepare(`SELECT user_email FROM student_details WHERE user_email = ?`).get(d.user_email);
+  const exists = db.prepare(`
+    SELECT user_email, profile_completed, advisor_name, advisor_email, profile_picture_url
+    FROM student_details
+    WHERE user_email = ?
+  `).get(d.user_email);
+  const hasAllRequiredFields =
+    !!String((d && d.first_name) || '').trim() &&
+    !!String((d && d.last_name) || '').trim() &&
+    !!String((d && d.student_id) || '').trim() &&
+    !!String((d && d.level) || '').trim() &&
+    !!String((d && d.speciality) || '').trim() &&
+    !!String((d && d.project_title) || '').trim();
+  const profileCompleted =
+    d && d.profile_completed !== undefined && d.profile_completed !== null
+      ? (Number(d.profile_completed) ? 1 : 0)
+      : hasAllRequiredFields
+        ? 1
+        : (exists && Number(exists.profile_completed)) || 0;
+  const payload = {
+    user_email: d.user_email,
+    student_id: d.student_id,
+    first_name: d.first_name,
+    last_name: d.last_name,
+    level: d.level,
+    speciality: d.speciality,
+    advisor_name:
+      d && d.advisor_name !== undefined && d.advisor_name !== null
+        ? String(d.advisor_name || '')
+        : String((exists && exists.advisor_name) || ''),
+    advisor_email:
+      d && d.advisor_email !== undefined && d.advisor_email !== null
+        ? String(d.advisor_email || '')
+        : String((exists && exists.advisor_email) || ''),
+    profile_picture_url:
+      d && d.profile_picture_url !== undefined && d.profile_picture_url !== null
+        ? String(d.profile_picture_url || '')
+        : String((exists && exists.profile_picture_url) || ''),
+    project_title: d.project_title,
+    profile_completed: profileCompleted
+  };
   if (exists) {
-    const stmt = db.prepare(`UPDATE student_details SET student_id=@student_id, first_name=@first_name, last_name=@last_name, level=@level, speciality=@speciality, project_title=@project_title WHERE user_email=@user_email`);
-    stmt.run(d);
+    const stmt = db.prepare(`
+      UPDATE student_details
+      SET
+        student_id=@student_id,
+        first_name=@first_name,
+        last_name=@last_name,
+        level=@level,
+        speciality=@speciality,
+        advisor_name=@advisor_name,
+        advisor_email=@advisor_email,
+        profile_picture_url=@profile_picture_url,
+        project_title=@project_title,
+        profile_completed=@profile_completed
+      WHERE user_email=@user_email
+    `);
+    stmt.run(payload);
     return d.user_email;
   } else {
-    const stmt = db.prepare(`INSERT INTO student_details (user_email, student_id, first_name, last_name, level, speciality, project_title) VALUES (@user_email, @student_id, @first_name, @last_name, @level, @speciality, @project_title)`);
-    stmt.run(d);
+    const stmt = db.prepare(`
+      INSERT INTO student_details
+      (
+        user_email,
+        student_id,
+        first_name,
+        last_name,
+        level,
+        speciality,
+        advisor_name,
+        advisor_email,
+        profile_picture_url,
+        project_title,
+        profile_completed
+      )
+      VALUES (
+        @user_email,
+        @student_id,
+        @first_name,
+        @last_name,
+        @level,
+        @speciality,
+        @advisor_name,
+        @advisor_email,
+        @profile_picture_url,
+        @project_title,
+        @profile_completed
+      )
+    `);
+    stmt.run(payload);
     return d.user_email;
   }
 }
@@ -276,27 +447,112 @@ export function listTeachers() {
       td.teacher_id,
       td.first_name,
       td.last_name,
-      td.speciality
+      td.grade,
+      td.speciality,
+      td.profile_completed
     FROM users u
     LEFT JOIN teacher_details td ON td.user_email = u.email
     WHERE u.role = 'professor'
     ORDER BY COALESCE(td.last_name, u.name), COALESCE(td.first_name, '')
   `).all();
 }
+export function getTeacherByEmail(email) {
+  return db.prepare(`
+    SELECT
+      u.email AS user_email,
+      u.name AS account_name,
+      td.teacher_id,
+      td.first_name,
+      td.last_name,
+      td.grade,
+      td.speciality,
+      td.profile_completed
+    FROM users u
+    LEFT JOIN teacher_details td ON td.user_email = u.email
+    WHERE u.role = 'professor' AND u.email = @email
+    LIMIT 1
+  `).get({ email });
+}
 export function upsertTeacher(d) {
-  const exists = db.prepare(`SELECT user_email FROM teacher_details WHERE user_email = ?`).get(d.user_email);
+  const exists = db.prepare(`
+    SELECT user_email, grade, profile_completed
+    FROM teacher_details
+    WHERE user_email = ?
+  `).get(d.user_email);
+  const hasAllRequiredFields =
+    !!String((d && d.first_name) || '').trim() &&
+    !!String((d && d.last_name) || '').trim() &&
+    !!String((d && d.teacher_id) || '').trim() &&
+    !!String((d && d.grade) || '').trim() &&
+    !!String((d && d.speciality) || '').trim();
+  const profileCompleted =
+    d && d.profile_completed !== undefined && d.profile_completed !== null
+      ? (Number(d.profile_completed) ? 1 : 0)
+      : hasAllRequiredFields
+        ? 1
+        : (exists && Number(exists.profile_completed)) || 0;
+  const payload = {
+    user_email: String((d && d.user_email) || '').toLowerCase(),
+    teacher_id:
+      d && d.teacher_id !== undefined && d.teacher_id !== null
+        ? String(d.teacher_id || '')
+        : '',
+    first_name:
+      d && d.first_name !== undefined && d.first_name !== null
+        ? String(d.first_name || '')
+        : '',
+    last_name:
+      d && d.last_name !== undefined && d.last_name !== null
+        ? String(d.last_name || '')
+        : '',
+    grade:
+      d && d.grade !== undefined && d.grade !== null
+        ? String(d.grade || '')
+        : String((exists && exists.grade) || ''),
+    speciality:
+      d && d.speciality !== undefined && d.speciality !== null
+        ? String(d.speciality || '')
+        : '',
+    profile_completed: profileCompleted
+  };
   if (exists) {
-    const stmt = db.prepare(`UPDATE teacher_details SET teacher_id=@teacher_id, first_name=@first_name, last_name=@last_name, speciality=@speciality WHERE user_email=@user_email`);
-    stmt.run(d);
+    const stmt = db.prepare(`
+      UPDATE teacher_details
+      SET
+        teacher_id=@teacher_id,
+        first_name=@first_name,
+        last_name=@last_name,
+        grade=@grade,
+        speciality=@speciality,
+        profile_completed=@profile_completed
+      WHERE user_email=@user_email
+    `);
+    stmt.run(payload);
     return d.user_email;
   } else {
-    const stmt = db.prepare(`INSERT INTO teacher_details (user_email, teacher_id, first_name, last_name, speciality) VALUES (@user_email, @teacher_id, @first_name, @last_name, @speciality)`);
-    stmt.run(d);
+    const stmt = db.prepare(`
+      INSERT INTO teacher_details
+      (user_email, teacher_id, first_name, last_name, grade, speciality, profile_completed)
+      VALUES (@user_email, @teacher_id, @first_name, @last_name, @grade, @speciality, @profile_completed)
+    `);
+    stmt.run(payload);
     return d.user_email;
   }
 }
 
 export function listRooms() {
+  db.exec(`
+  INSERT OR IGNORE INTO rooms (name)
+  SELECT DISTINCT TRIM(room_name)
+  FROM room_slots
+  WHERE TRIM(COALESCE(room_name, '')) <> '';
+  `);
+  db.exec(`
+  INSERT OR IGNORE INTO rooms (name)
+  SELECT DISTINCT TRIM(classroom)
+  FROM defenses
+  WHERE TRIM(COALESCE(classroom, '')) <> '';
+  `);
   return db.prepare(`SELECT * FROM rooms ORDER BY name`).all();
 }
 export function addRoom({ name }) {
@@ -308,8 +564,75 @@ export function listRoomSlots() {
   return db.prepare(`SELECT * FROM room_slots ORDER BY day, start`).all();
 }
 export function addRoomSlot({ room_name, day, start, end }) {
-  const info = db.prepare(`INSERT INTO room_slots (room_name, day, start, end) VALUES (@room_name, @day, @start, @end)`).run({ room_name, day, start, end });
+  const normalizedRoom = String(room_name || '').trim();
+  if (normalizedRoom) {
+    db.prepare(`INSERT OR IGNORE INTO rooms (name) VALUES (?)`).run(normalizedRoom);
+  }
+  const info = db.prepare(`INSERT INTO room_slots (room_name, day, start, end) VALUES (@room_name, @day, @start, @end)`).run({
+    room_name: normalizedRoom,
+    day,
+    start,
+    end
+  });
   return info.lastInsertRowid;
+}
+export function syncRoomSlotForDefense({ student_email, day, time, room_name }) {
+  const email = String(student_email || '').trim().toLowerCase();
+  const targetDay = String(day || '').trim();
+  const targetTime = String(time || '').trim();
+  const targetRoom = String(room_name || '').trim();
+  const parts = targetTime.split('-').map(s => s.trim()).filter(Boolean);
+  const parsedRange = parseTimeRange(targetTime);
+  const start = parts[0] || '';
+  const end = parts[1] || '';
+
+  if (!email || !targetDay || !targetRoom || !parsedRange || !start || !end) {
+    return { ok: false, slot_id: null, reserved: false, shared: false };
+  }
+
+  const tx = db.transaction(() => {
+    // Keep room catalog in sync with manually entered defenses.
+    db.prepare(`INSERT OR IGNORE INTO rooms (name) VALUES (?)`).run(targetRoom);
+
+    const existingSlot = db.prepare(`
+      SELECT id, reserved_by
+      FROM room_slots
+      WHERE room_name=@room_name AND day=@day AND start=@start AND end=@end
+      LIMIT 1
+    `).get({ room_name: targetRoom, day: targetDay, start, end });
+
+    let slotId = null;
+    let reserved = false;
+    let shared = false;
+
+    if (!existingSlot) {
+      const info = db.prepare(`
+        INSERT INTO room_slots (room_name, day, start, end, reserved_by)
+        VALUES (@room_name, @day, @start, @end, @reserved_by)
+      `).run({ room_name: targetRoom, day: targetDay, start, end, reserved_by: email });
+      slotId = Number(info.lastInsertRowid);
+      reserved = true;
+    } else {
+      slotId = Number(existingSlot.id);
+      if (!existingSlot.reserved_by || existingSlot.reserved_by === email) {
+        db.prepare(`UPDATE room_slots SET reserved_by=@student_email WHERE id=@slot_id`).run({ student_email: email, slot_id: slotId });
+        reserved = true;
+      } else {
+        // Another student already owns this slot: keep it (group/shared defense case).
+        shared = true;
+      }
+    }
+
+    if (reserved && slotId) {
+      db.prepare(`UPDATE room_slots SET reserved_by = NULL WHERE reserved_by = ? AND id <> ?`).run(email, slotId);
+    } else {
+      db.prepare(`UPDATE room_slots SET reserved_by = NULL WHERE reserved_by = ?`).run(email);
+    }
+
+    return { ok: true, slot_id: slotId || null, reserved, shared };
+  });
+
+  return tx();
 }
 export function reserveRoomSlot({ slot_id, student_email }) {
   const info = db.prepare(`UPDATE room_slots SET reserved_by=@student_email WHERE id=@slot_id AND reserved_by IS NULL`).run({ slot_id, student_email });
@@ -326,6 +649,10 @@ export function rescheduleDefenseToSlot({ student_email, slot_id }) {
     if (!slot) return { ok: false, errors: ['Créneau introuvable'] };
     if (slot.reserved_by && slot.reserved_by !== student_email) {
       return { ok: false, errors: ['Créneau déjà réservé'] };
+    }
+
+    if (slot.room_name) {
+      db.prepare(`INSERT OR IGNORE INTO rooms (name) VALUES (?)`).run(String(slot.room_name).trim());
     }
 
     // Release any other slot reserved by this student, and reserve the new one.
@@ -375,10 +702,12 @@ export function hasSupervision({ student_email, teacher_email, role }) {
   return !!row;
 }
 
-export function listSupervisorsForStudent(student_email) {
+export function listSupervisorsForStudent(student_email, role = 'supervisor') {
+  const roleFilter = role === 'all' ? null : role;
   return db.prepare(`
     SELECT
       s.teacher_email,
+      s.role,
       COALESCE(
         NULLIF(TRIM(COALESCE(td.first_name, '') || ' ' || COALESCE(td.last_name, '')), ''),
         u.name,
@@ -387,15 +716,18 @@ export function listSupervisorsForStudent(student_email) {
     FROM supervisions s
     LEFT JOIN users u ON u.email = s.teacher_email
     LEFT JOIN teacher_details td ON td.user_email = s.teacher_email
-    WHERE s.student_email=@student_email AND s.role='supervisor'
-    ORDER BY teacher_name
-  `).all({ student_email });
+    WHERE s.student_email=@student_email
+      AND (@role IS NULL OR s.role=@role)
+    ORDER BY CASE WHEN s.role='supervisor' THEN 0 ELSE 1 END, teacher_name
+  `).all({ student_email, role: roleFilter });
 }
 
-export function listStudentsForTeacher({ teacher_email, role }) {
+export function listStudentsForTeacher({ teacher_email, role = 'supervisor' }) {
+  const roleFilter = role === 'all' ? null : role;
   const rows = db.prepare(`
     SELECT
       s.student_email,
+      s.role AS supervision_role,
       COALESCE(
         NULLIF(TRIM(COALESCE(sd.first_name, '') || ' ' || COALESCE(sd.last_name, '')), ''),
         u.name,
@@ -425,9 +757,10 @@ export function listStudentsForTeacher({ teacher_email, role }) {
       ON e.student_email = s.student_email
      AND e.evaluator_email = s.teacher_email
      AND e.evaluator_role = s.role
-    WHERE s.teacher_email=@teacher_email AND s.role=@role
-    ORDER BY student_name
-  `).all({ teacher_email, role });
+    WHERE s.teacher_email=@teacher_email
+      AND (@role IS NULL OR s.role=@role)
+    ORDER BY student_name, s.role
+  `).all({ teacher_email, role: roleFilter });
 
   return rows.map(r => ({
     ...r,
@@ -535,6 +868,40 @@ export function setPlanningStatus({ validated, validated_by }) {
   return 1;
 }
 
+export function getDocumentDeadlines() {
+  const row = db.prepare(`
+    SELECT report_deadline, memoire_deadline, updated_at, updated_by
+    FROM document_deadlines
+    WHERE id = 1
+  `).get();
+  if (row) return row;
+  return { report_deadline: '', memoire_deadline: '', updated_at: null, updated_by: null };
+}
+
+export function setDocumentDeadlines({ report_deadline, memoire_deadline, updated_by }) {
+  const now = Date.now();
+  const payload = {
+    report_deadline: report_deadline || '',
+    memoire_deadline: memoire_deadline || '',
+    updated_at: now,
+    updated_by: updated_by || null
+  };
+  const exists = db.prepare(`SELECT id FROM document_deadlines WHERE id = 1`).get();
+  if (exists) {
+    db.prepare(`
+      UPDATE document_deadlines
+      SET report_deadline=@report_deadline, memoire_deadline=@memoire_deadline, updated_at=@updated_at, updated_by=@updated_by
+      WHERE id = 1
+    `).run(payload);
+    return 1;
+  }
+  db.prepare(`
+    INSERT INTO document_deadlines (id, report_deadline, memoire_deadline, updated_at, updated_by)
+    VALUES (1, @report_deadline, @memoire_deadline, @updated_at, @updated_by)
+  `).run(payload);
+  return 1;
+}
+
 export function listUserEmailsByRole(role) {
   return db
     .prepare(`SELECT email FROM users WHERE role = ? ORDER BY email`)
@@ -577,6 +944,14 @@ function gradeBucketKey(g) {
   return 'insuffisant';
 }
 
+function mentionFromGradeValue(g) {
+  if (g >= 16) return 'Tres bien';
+  if (g >= 14) return 'Bien';
+  if (g >= 12) return 'Assez bien';
+  if (g >= 10) return 'Passable';
+  return 'Insuffisant';
+}
+
 export function listGradeSummaries() {
   const rows = db.prepare(`
     SELECT
@@ -606,6 +981,102 @@ export function listGradeSummaries() {
       bucket: Number.isFinite(g) ? gradeBucketKey(g) : null
     };
   });
+}
+
+export function listFinalGradesAdmin() {
+  const rows = db.prepare(`
+    SELECT
+      u.email AS student_email,
+      COALESCE(
+        NULLIF(TRIM(COALESCE(sd.first_name, '') || ' ' || COALESCE(sd.last_name, '')), ''),
+        u.name,
+        u.email
+      ) AS student_name,
+      AVG(e.grade) AS avg_grade,
+      COUNT(e.grade) AS grades_count,
+      gp.published_at,
+      gp.published_by
+    FROM users u
+    LEFT JOIN student_details sd ON sd.user_email = u.email
+    LEFT JOIN evaluations e ON e.student_email = u.email AND e.grade IS NOT NULL
+    LEFT JOIN grade_publications gp ON gp.student_email = u.email
+    WHERE u.role = 'student'
+    GROUP BY u.email
+    ORDER BY student_name
+  `).all();
+
+  return rows.map((r) => {
+    const g = r.avg_grade === null || r.avg_grade === undefined ? null : Number(r.avg_grade);
+    return {
+      student_email: r.student_email,
+      student_name: r.student_name,
+      avg_grade: Number.isFinite(g) ? g : null,
+      grades_count: Number(r.grades_count) || 0,
+      mention: Number.isFinite(g) ? mentionFromGradeValue(g) : null,
+      published: !!Number(r.published_at),
+      published_at: r.published_at || null,
+      published_by: r.published_by || null
+    };
+  });
+}
+
+export function setFinalGradePublication({ student_email, published, published_by }) {
+  const email = String(student_email || '').toLowerCase();
+  const tx = db.transaction(({ email, published, published_by }) => {
+    if (published) {
+      const now = Date.now();
+      db.prepare(`
+        INSERT INTO grade_publications (student_email, published_at, published_by)
+        VALUES (@student_email, @published_at, @published_by)
+        ON CONFLICT(student_email)
+        DO UPDATE SET published_at = excluded.published_at, published_by = excluded.published_by
+      `).run({
+        student_email: email,
+        published_at: now,
+        published_by: published_by || null
+      });
+      return { changes: 1, published_at: now };
+    }
+    const info = db.prepare(`DELETE FROM grade_publications WHERE student_email = @student_email`).run({ student_email: email });
+    return { changes: info.changes, published_at: null };
+  });
+  return tx({ email, published: !!published, published_by });
+}
+
+export function getPublishedFinalGradeForStudent(student_email) {
+  const email = String(student_email || '').toLowerCase();
+  const row = db.prepare(`
+    SELECT
+      u.email AS student_email,
+      COALESCE(
+        NULLIF(TRIM(COALESCE(sd.first_name, '') || ' ' || COALESCE(sd.last_name, '')), ''),
+        u.name,
+        u.email
+      ) AS student_name,
+      AVG(e.grade) AS avg_grade,
+      COUNT(e.grade) AS grades_count,
+      gp.published_at,
+      gp.published_by
+    FROM users u
+    LEFT JOIN student_details sd ON sd.user_email = u.email
+    LEFT JOIN evaluations e ON e.student_email = u.email AND e.grade IS NOT NULL
+    JOIN grade_publications gp ON gp.student_email = u.email
+    WHERE u.role = 'student' AND u.email = @email
+    GROUP BY u.email
+    LIMIT 1
+  `).get({ email });
+
+  if (!row) return null;
+  const g = row.avg_grade === null || row.avg_grade === undefined ? null : Number(row.avg_grade);
+  return {
+    student_email: row.student_email,
+    student_name: row.student_name,
+    avg_grade: Number.isFinite(g) ? g : null,
+    grades_count: Number(row.grades_count) || 0,
+    mention: Number.isFinite(g) ? mentionFromGradeValue(g) : null,
+    published_at: row.published_at || null,
+    published_by: row.published_by || null
+  };
 }
 
 export function listEvaluationsAdmin() {
@@ -668,6 +1139,30 @@ export function listNotificationBatches({ limit = 30 } = {}) {
     ORDER BY b.created_at DESC, b.id DESC
     LIMIT @limit
   `).all({ limit: lim });
+}
+
+export function listNotificationBatchesByCreator({ created_by, limit = 30 } = {}) {
+  const lim = Math.max(1, Math.min(200, Number(limit) || 30));
+  const creator = String(created_by || '').toLowerCase().trim();
+  if (!creator) return [];
+  return db.prepare(`
+    SELECT
+      b.id,
+      b.title,
+      b.message,
+      b.target_type,
+      b.target_value,
+      b.created_at,
+      b.created_by,
+      COUNT(d.id) AS recipients,
+      SUM(CASE WHEN d.read_at IS NOT NULL THEN 1 ELSE 0 END) AS read_count
+    FROM notification_batches b
+    LEFT JOIN notification_deliveries d ON d.batch_id = b.id
+    WHERE LOWER(COALESCE(b.created_by, '')) = @created_by
+    GROUP BY b.id
+    ORDER BY b.created_at DESC, b.id DESC
+    LIMIT @limit
+  `).all({ created_by: creator, limit: lim });
 }
 
 export function listNotificationsForRecipient({ recipient_email, limit = 30 } = {}) {

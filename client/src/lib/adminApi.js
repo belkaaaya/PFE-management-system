@@ -8,16 +8,27 @@ async function request(path, options) {
     try {
       data = text ? JSON.parse(text) : null;
     } catch {
-      data = { errors: ['Réponse serveur invalide.'] };
+      data = { errors: [res.ok ? 'Invalid JSON response from server.' : `HTTP ${res.status}`] };
     }
-    return { ok: res.ok, data };
+    return { ok: res.ok, status: res.status, data };
   } catch {
-    return { ok: false, data: { errors: [`Impossible de joindre l'API (${API_URL}). Démarrez le serveur backend.`] } };
+    return { ok: false, status: 0, data: { errors: [`Unable to reach API (${API_URL}). Start backend server.`] } };
   }
 }
 
 export async function getStats() {
   return request(`/api/admin/stats`);
+}
+
+export async function getAdminDocumentDeadlines() {
+  return request(`/api/admin/document-deadlines`);
+}
+export async function saveAdminDocumentDeadlines(payload) {
+  return request(`/api/admin/document-deadlines`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function getPlanningStatus() {
@@ -92,13 +103,15 @@ export async function deleteSupervision(id) {
 export async function listSchedule() {
   return request(`/api/admin/schedule`);
 }
-export async function autoGenerateSchedule() {
-  return request(`/api/admin/schedule/auto`, {
-    method: 'POST'
-  });
-}
 export async function rescheduleDefense(payload) {
   return request(`/api/admin/schedule/reschedule`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
+export async function upsertDefenseRecord(payload) {
+  return request(`/api/defense`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
@@ -119,8 +132,25 @@ export async function saveReport(payload) {
 export async function listGrades() {
   return request(`/api/admin/grades`);
 }
+export async function listFinalGrades() {
+  return request(`/api/admin/final-grades`);
+}
+export async function publishFinalGrade(payload) {
+  return request(`/api/admin/final-grades/publish`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+}
 export async function listEvaluations() {
   return request(`/api/admin/evaluations`);
+}
+export async function saveAdminEvaluation(payload) {
+  return request(`/api/admin/evaluations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
 }
 
 export async function listNotificationBatches(limit = 30) {
@@ -149,3 +179,4 @@ export async function deleteRoomSlot(id) {
 export async function deleteSchedule(email) {
   return request(`/api/admin/schedule/${encodeURIComponent(email)}`, { method: 'DELETE' });
 }
+

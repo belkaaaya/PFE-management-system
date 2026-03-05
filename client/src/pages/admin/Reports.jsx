@@ -1,10 +1,10 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { listReports, saveReport } from '../../lib/adminApi.js';
 
-function fmtDefense(r) {
-  if (!r || !r.defense_date) return '-';
-  const parts = [r.defense_date, r.defense_time, r.defense_room].filter(Boolean);
-  return parts.join(' — ');
+function fmtDefense(row) {
+  if (!row || !row.defense_date) return '-';
+  const parts = [row.defense_date, row.defense_time, row.defense_room].filter(Boolean);
+  return parts.join(' - ');
 }
 
 export default function AdminReports() {
@@ -14,20 +14,21 @@ export default function AdminReports() {
   const [loading, setLoading] = useState(true);
 
   const [editingEmail, setEditingEmail] = useState('');
-  const editing = useMemo(() => rows.find((r) => r.student_email === editingEmail) || null, [rows, editingEmail]);
-
+  const editing = useMemo(() => rows.find((row) => row.student_email === editingEmail) || null, [rows, editingEmail]);
   const [form, setForm] = useState({ status: 'not_submitted', deadline: '', report_url: '', memoire_url: '' });
 
   async function load(nextStatus) {
-    const st = nextStatus || status;
+    const target = nextStatus || status;
     setLoading(true);
-    const r = await listReports(st);
+    const r = await listReports(target);
+
     if (!r.ok) {
       setError((r.data && r.data.errors && r.data.errors[0]) || 'Unable to load reports.');
       setRows([]);
       setLoading(false);
       return;
     }
+
     setError('');
     setRows(Array.isArray(r.data) ? r.data : []);
     setLoading(false);
@@ -45,10 +46,10 @@ export default function AdminReports() {
       report_url: editing.report_url || '',
       memoire_url: editing.memoire_url || ''
     });
-  }, [editingEmail]);
+  }, [editing]);
 
-  function onFormChange(k, v) {
-    setForm((s) => ({ ...s, [k]: v }));
+  function onFormChange(key, value) {
+    setForm((prev) => ({ ...prev, [key]: value }));
   }
 
   async function onSave() {
@@ -72,7 +73,7 @@ export default function AdminReports() {
       <div className="toolbar">
         <div className="field select" style={{ width: 260, margin: 0 }}>
           <span className="icon" aria-hidden="true">
-            🧾
+            R
           </span>
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="all">All</option>
@@ -80,7 +81,7 @@ export default function AdminReports() {
             <option value="not_submitted">Not submitted</option>
           </select>
           <span className="chevron" aria-hidden="true">
-            ▾
+            v
           </span>
         </div>
         <button className="btn" type="button" onClick={() => load(status)} disabled={loading}>
@@ -91,26 +92,26 @@ export default function AdminReports() {
       {error && <div className="errors">{error}</div>}
 
       {editing && (
-        <div style={{ marginTop: 14, border: '1px solid #d6d9e3', borderRadius: 14, padding: 12, background: 'rgba(255,255,255,0.74)' }}>
+        <div style={{ marginTop: 14, border: '1px solid var(--line)', borderRadius: 14, padding: 12, background: 'var(--surface-soft)' }}>
           <p className="subtitle" style={{ textAlign: 'left', margin: 0 }}>
-            Edit — {editing.student_name} ({editing.student_email})
+            Edit - {editing.student_name} ({editing.student_email})
           </p>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 10 }}>
             <div className="field select" style={{ margin: 0 }}>
               <span className="icon" aria-hidden="true">
-                📌
+                S
               </span>
               <select value={form.status} onChange={(e) => onFormChange('status', e.target.value)}>
                 <option value="not_submitted">Not submitted</option>
                 <option value="submitted">Submitted</option>
               </select>
               <span className="chevron" aria-hidden="true">
-                ▾
+                v
               </span>
             </div>
             <div className="field" style={{ margin: 0 }}>
               <span className="icon" aria-hidden="true">
-                📅
+                D
               </span>
               <input value={form.deadline} placeholder="Deadline (e.g. 2026-06-15)" onChange={(e) => onFormChange('deadline', e.target.value)} />
             </div>
@@ -118,13 +119,13 @@ export default function AdminReports() {
           <div style={{ display: 'grid', gap: 10, marginTop: 10 }}>
             <div className="field" style={{ margin: 0 }}>
               <span className="icon" aria-hidden="true">
-                🔗
+                L
               </span>
               <input value={form.report_url} placeholder="Report URL" onChange={(e) => onFormChange('report_url', e.target.value)} />
             </div>
             <div className="field" style={{ margin: 0 }}>
               <span className="icon" aria-hidden="true">
-                🔗
+                L
               </span>
               <input value={form.memoire_url} placeholder="Thesis URL" onChange={(e) => onFormChange('memoire_url', e.target.value)} />
             </div>
@@ -155,17 +156,17 @@ export default function AdminReports() {
             </tr>
           </thead>
           <tbody>
-            {rows.map((r, i) => (
-              <tr key={r.student_email || i} style={{ background: r.status === 'submitted' ? '#f0fdf4' : undefined }}>
-                <td>{r.student_name}</td>
-                <td>{r.student_email}</td>
-                <td>{r.status === 'submitted' ? 'Submitted' : 'Not submitted'}</td>
-                <td>{r.deadline || '-'}</td>
-                <td>{r.report_url ? <a href={r.report_url} target="_blank" rel="noreferrer">Open</a> : '-'}</td>
-                <td>{r.memoire_url ? <a href={r.memoire_url} target="_blank" rel="noreferrer">Open</a> : '-'}</td>
-                <td>{fmtDefense(r)}</td>
+            {rows.map((row, index) => (
+              <tr key={row.student_email || index} style={{ background: row.status === 'submitted' ? 'var(--surface-success)' : undefined }}>
+                <td>{row.student_name}</td>
+                <td>{row.student_email}</td>
+                <td>{row.status === 'submitted' ? 'Submitted' : 'Not submitted'}</td>
+                <td>{row.deadline || '-'}</td>
+                <td>{row.report_url ? <a href={row.report_url} target="_blank" rel="noreferrer">Open</a> : '-'}</td>
+                <td>{row.memoire_url ? <a href={row.memoire_url} target="_blank" rel="noreferrer">Open</a> : '-'}</td>
+                <td>{fmtDefense(row)}</td>
                 <td>
-                  <button className="btn" type="button" onClick={() => setEditingEmail(r.student_email)}>
+                  <button className="btn" type="button" onClick={() => setEditingEmail(row.student_email)}>
                     Edit
                   </button>
                 </td>
@@ -184,4 +185,3 @@ export default function AdminReports() {
     </div>
   );
 }
-

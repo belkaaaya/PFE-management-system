@@ -261,7 +261,7 @@ export default function AdminExports() {
       {error && <div className="errors">{error}</div>}
 
       <div style={{ display: 'grid', gap: 16, marginTop: 14 }}>
-        <div style={{ border: '1px solid #d6d9e3', borderRadius: 14, padding: 12, background: 'rgba(255,255,255,0.74)' }}>
+        <div style={{ border: '1px solid var(--line)', borderRadius: 14, padding: 12, background: 'var(--surface-soft)' }}>
           <p className="subtitle" style={{ textAlign: 'left', margin: 0 }}>
             Schedule / defenses
           </p>
@@ -275,7 +275,7 @@ export default function AdminExports() {
           </div>
         </div>
 
-        <div style={{ border: '1px solid #d6d9e3', borderRadius: 14, padding: 12, background: 'rgba(255,255,255,0.74)' }}>
+        <div style={{ border: '1px solid var(--line)', borderRadius: 14, padding: 12, background: 'var(--surface-soft)' }}>
           <p className="subtitle" style={{ textAlign: 'left', margin: 0 }}>
             Grades
           </p>
@@ -292,7 +292,7 @@ export default function AdminExports() {
           </div>
         </div>
 
-        <div style={{ border: '1px solid #d6d9e3', borderRadius: 14, padding: 12, background: 'rgba(255,255,255,0.74)' }}>
+        <div style={{ border: '1px solid var(--line)', borderRadius: 14, padding: 12, background: 'var(--surface-soft)' }}>
           <p className="subtitle" style={{ textAlign: 'left', margin: 0 }}>
             Students
           </p>
@@ -306,7 +306,7 @@ export default function AdminExports() {
           </div>
         </div>
 
-        <div style={{ border: '1px solid #d6d9e3', borderRadius: 14, padding: 12, background: 'rgba(255,255,255,0.74)' }}>
+        <div style={{ border: '1px solid var(--line)', borderRadius: 14, padding: 12, background: 'var(--surface-soft)' }}>
           <p className="subtitle" style={{ textAlign: 'left', margin: 0 }}>
             Professors / juries
           </p>
@@ -320,7 +320,7 @@ export default function AdminExports() {
           </div>
         </div>
 
-        <div style={{ border: '1px solid #d6d9e3', borderRadius: 14, padding: 12, background: 'rgba(255,255,255,0.74)' }}>
+        <div style={{ border: '1px solid var(--line)', borderRadius: 14, padding: 12, background: 'var(--surface-soft)' }}>
           <p className="subtitle" style={{ textAlign: 'left', margin: 0 }}>
             Reports
           </p>
@@ -343,4 +343,3 @@ export default function AdminExports() {
     </div>
   );
 }
-

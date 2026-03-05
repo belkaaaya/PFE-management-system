@@ -15,10 +15,29 @@ function fmtRole(role) {
   return role === 'jury' ? 'Jury' : 'Supervisor';
 }
 
+function show(v) {
+  const value = String(v || '').trim();
+  return value || 'Not provided';
+}
+
+function inferNames(row) {
+  const parts = String((row && row.account_name) || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean);
+  const inferredLast = parts.length ? parts.slice(-1).join(' ') : '';
+  const inferredFirst = parts.length > 1 ? parts.slice(0, -1).join(' ') : '';
+  return {
+    first_name: String((row && row.first_name) || '').trim() || inferredFirst,
+    last_name: String((row && row.last_name) || '').trim() || inferredLast
+  };
+}
+
 export default function AdminTeachers() {
   const [rows, setRows] = useState([]);
   const [form, setForm] = useState(emptyTeacher);
   const [editingEmail, setEditingEmail] = useState('');
+  const [selectedRow, setSelectedRow] = useState(null);
   const [assign, setAssign] = useState(emptyAssign);
   const [showForm, setShowForm] = useState(false);
   const [showAssign, setShowAssign] = useState(false);
@@ -159,6 +178,71 @@ export default function AdminTeachers() {
     }
     setError('');
     await load();
+  }
+
+  if (selectedRow) {
+    const names = inferNames(selectedRow);
+    return (
+      <div>
+        <h2 className="title">Professor details</h2>
+        <p className="subtitle">All information for {show(names.first_name)} {show(names.last_name)}</p>
+
+        <div className="toolbar">
+          <button className="btn" type="button" onClick={() => setSelectedRow(null)}>
+            Back to list
+          </button>
+          <button
+            className="primary"
+            type="button"
+            onClick={() => {
+              onEditRow(selectedRow);
+              setSelectedRow(null);
+            }}
+          >
+            Edit
+          </button>
+        </div>
+
+        <section className="student-account-shell" style={{ marginTop: 12 }}>
+          <article className="student-account-card">
+            <div className="student-account-grid">
+              <div className="student-account-item">
+                <span className="student-account-label">Email</span>
+                <strong className="student-account-value">{show(selectedRow.user_email)}</strong>
+              </div>
+              <div className="student-account-item">
+                <span className="student-account-label">Account Name</span>
+                <strong className="student-account-value">{show(selectedRow.account_name)}</strong>
+              </div>
+              <div className="student-account-item">
+                <span className="student-account-label">Staff ID</span>
+                <strong className="student-account-value">{show(selectedRow.teacher_id)}</strong>
+              </div>
+              <div className="student-account-item">
+                <span className="student-account-label">First Name</span>
+                <strong className="student-account-value">{show(names.first_name)}</strong>
+              </div>
+              <div className="student-account-item">
+                <span className="student-account-label">Last Name</span>
+                <strong className="student-account-value">{show(names.last_name)}</strong>
+              </div>
+              <div className="student-account-item">
+                <span className="student-account-label">Grade</span>
+                <strong className="student-account-value">{show(selectedRow.grade)}</strong>
+              </div>
+              <div className="student-account-item">
+                <span className="student-account-label">Speciality</span>
+                <strong className="student-account-value">{show(selectedRow.speciality)}</strong>
+              </div>
+              <div className="student-account-item">
+                <span className="student-account-label">Profile Status</span>
+                <strong className="student-account-value">{Number(selectedRow.profile_completed) ? 'Completed' : 'Incomplete'}</strong>
+              </div>
+            </div>
+          </article>
+        </section>
+      </div>
+    );
   }
 
   return (
@@ -340,22 +424,39 @@ export default function AdminTeachers() {
           </thead>
           <tbody>
             {rows.map((r, i) => {
-              const parts = String(r.account_name || '').trim().split(/\s+/).filter(Boolean);
-              const inferredLast = parts.length ? parts.slice(-1).join(' ') : '';
-              const inferredFirst = parts.length > 1 ? parts.slice(0, -1).join(' ') : '';
+              const names = inferNames(r);
               return (
-                <tr key={r.user_email || i}>
+                <tr
+                  key={r.user_email || i}
+                  onClick={() => setSelectedRow(r)}
+                  style={{ cursor: 'pointer' }}
+                >
                   <td>{r.user_email}</td>
                   <td>{r.teacher_id || ''}</td>
-                  <td>{r.last_name || inferredLast}</td>
-                  <td>{r.first_name || inferredFirst}</td>
+                  <td>{names.last_name}</td>
+                  <td>{names.first_name}</td>
                   <td>{r.speciality || ''}</td>
                   <td>
                     <div style={{ display: 'flex', gap: 8, justifyContent: 'center' }}>
-                      <button className="btn" type="button" onClick={() => onEditRow(r)}>
+                      <button
+                        className="btn"
+                        type="button"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          onEditRow(r);
+                        }}
+                      >
                         Edit
                       </button>
-                      <button className="icon-btn" type="button" onClick={() => onDelete(r.user_email)} aria-label={`Delete ${r.user_email}`}>
+                      <button
+                        className="icon-btn"
+                        type="button"
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          onDelete(r.user_email);
+                        }}
+                        aria-label={`Delete ${r.user_email}`}
+                      >
                         x
                       </button>
                     </div>
@@ -376,4 +477,3 @@ export default function AdminTeachers() {
     </div>
   );
 }
-
